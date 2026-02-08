@@ -29,23 +29,23 @@ function init() {
         if(badge) badge.innerText = `Connected: ${currentPlayer.name}`;
     }
 
-    // Listener: Sync Players & Admin Rights
+    // Listener: Sync Players & Handle Admin Rights
     rtdb.ref('players').on('value', (snapshot) => {
         const data = snapshot.val() || {};
-        // Sort by ID (timestamp) to ensure the first person is always the Admin
+        // Sort by ID to ensure the first person to join is ALWAYS the admin
         players = Object.keys(data).map(key => data[key]).sort((a, b) => a.id - b.id);
         
         renderPlayerList();
         updateTeamDropdown(); 
         
-        // Admin Logic
+        // Admin Logic: Only the first player in the database sees the START button
         const adminBtn = document.getElementById('adminStartBtn');
         if (currentPlayer && players.length > 0 && currentPlayer.id === players[0].id) {
             if(adminBtn) adminBtn.style.display = 'inline-block';
         }
     });
 
-    // Listener: Sync Matches & Bracket UI
+    // Listener: Sync Matches & Bracket
     rtdb.ref('matches').on('value', (snapshot) => {
         const data = snapshot.val() || {};
         matches = Object.keys(data).map(key => ({ id: key, ...data[key] }));
@@ -71,21 +71,16 @@ document.getElementById('regForm').addEventListener('submit', async (e) => {
     
     if(!name || !team) return alert("Fill in your name and pick a team!");
 
-    // Security: Final check if team was taken
+    // Security: Check if team was taken while the user was typing
     const isTaken = players.some(p => p.team === team);
     if (isTaken) return alert("❌ This team was just taken! Choose another.");
 
     const id = Date.now().toString();
     const newUser = { id, name, team };
     
-    try {
-        await rtdb.ref('players/' + id).set(newUser);
-        sessionStorage.setItem('ef_user', JSON.stringify(newUser));
-        currentPlayer = newUser;
-        location.reload(); 
-    } catch (err) {
-        alert("Error saving data. Check Firebase rules!");
-    }
+    await rtdb.ref('players/' + id).set(newUser);
+    sessionStorage.setItem('ef_user', JSON.stringify(newUser));
+    location.reload(); // Refresh to update UI
 });
 
 function updateTeamDropdown() {
@@ -97,7 +92,7 @@ function updateTeamDropdown() {
         if (opt.value === "") return;
         if (takenTeams.includes(opt.value)) {
             opt.disabled = true;
-            opt.text = `${opt.value} (TAKEN)`;
+            opt.text = `${opt.value} (ALREADY TAKEN)`;
         } else {
             opt.disabled = false;
             opt.text = opt.value;
@@ -107,61 +102,30 @@ function updateTeamDropdown() {
 
 // --- 5. TOURNAMENT CONTROL ---
 window.startTournament = async () => {
-    if (players.length < 2) return alert("Need at least 2 players!");
+    if (players.length < 2) return alert("Need at least 2 players to start!");
 
     let shuffled = [...players].sort(() => 0.5 - Math.random());
     let updates = {};
-
-    // Use a temporary array to handle BYE promotion within the same transaction
-    let round16Matches = [];
 
     for(let i = 0; i < shuffled.length; i += 2) {
         let p1 = shuffled[i];
         let p2 = shuffled[i+1] || { name: 'BYE', id: 'bye', team: '-' };
         let mId = rtdb.ref().child('matches').push().key;
         
-        let matchObj = {
+        updates['/matches/' + mId] = {
             round: 16, p1, p2, 
             status: (p2.id === 'bye' ? 'verified' : 'open'),
-            score1: (p2.id === 'bye' ? 3 : null),
-            score2: (p2.id === 'bye' ? 0 : null),
+            score1: (p2.id === 'bye' ? 3 : 0),
+            score2: 0,
             winner: (p2.id === 'bye' ? p1 : null)
         };
-        
-        updates['/matches/' + mId] = matchObj;
-        
-        // If it's a BYE, we prepare promotion logic immediately
-        if(p2.id === 'bye') {
-            promoteWinnerSync(matchObj, p1, updates);
-        }
     }
     
     updates['/settings/tournament'] = { started: true };
     await rtdb.ref().update(updates);
 };
 
-// Internal function to handle BYEs during the start tournament phase
-function promoteWinnerSync(match, winner, updatesObj) {
-    let nextR = match.round / 2;
-    if (nextR < 1) return;
-
-    // We look at the updates object to find an existing match in the next round
-    let nextMatchId = Object.keys(updatesObj).find(key => 
-        updatesObj[key].round === nextR && !updatesObj[key].p2 && updatesObj[key].status === 'open'
-    );
-
-    if (nextMatchId) {
-        updatesObj[nextMatchId].p2 = winner;
-    } else {
-        let newKey = rtdb.ref().child('matches').push().key;
-        updatesObj['/matches/' + newKey] = {
-            round: nextR, p1: winner, p2: null,
-            status: 'open', winner: null, score1: null, score2: null
-        };
-    }
-}
-
-// --- 6. SCORE REPORTING ---
+// --- 6. SCORE REPORTING & REAL-TIME VERIFICATION ---
 window.openScoreModal = (id) => {
     currentMatchId = id;
     updateModalStatus(id);
@@ -184,14 +148,18 @@ function updateModalStatus(id) {
         document.getElementById('reportedScoreDisplay').innerText = `${m.score1} - ${m.score2}`;
         document.getElementById('uploadedPhoto').src = m.photoUrl;
 
+        // VERIFICATION LOGIC:
         if (currentPlayer.id === m.reportedBy) {
+            // I am the reporter -> I must wait
             if(btnBox) btnBox.style.display = 'none';
             if(waitMsg) waitMsg.style.display = 'block';
         } else {
+            // I am the opponent -> I can confirm or dispute
             if(btnBox) btnBox.style.display = 'flex';
             if(waitMsg) waitMsg.style.display = 'none';
         }
     } else {
+        // Normal submission view
         upSec.style.display = 'block';
         verSec.style.display = 'none';
     }
@@ -202,7 +170,7 @@ window.submitInitialScore = async () => {
     const s2 = document.getElementById('score2').value;
     const file = document.getElementById('matchPhoto').files[0];
     
-    if(!file || s1 === "" || s2 === "") return alert("Please fill all fields!");
+    if(!file || s1 === "" || s2 === "") return alert("Please enter the score and upload a screenshot proof.");
 
     const ref = storage.ref().child(`proofs/${currentMatchId}`);
     await ref.put(file);
@@ -218,35 +186,31 @@ window.submitInitialScore = async () => {
 };
 
 window.confirmScore = async (ok) => {
-    if(!ok) return alert("Dispute reported to Admin.");
+    if(!ok) return alert("Admin has been notified of the dispute.");
 
     const m = matches.find(x => x.id === currentMatchId);
     const winner = (m.score1 > m.score2) ? m.p1 : m.p2;
 
     await rtdb.ref('matches/' + currentMatchId).update({ status: 'verified', winner });
     
+    // Auto-promote logic
     promoteWinner(m, winner);
     closeModal();
 };
 
-async function promoteWinner(m, winner) {
+function promoteWinner(m, winner) {
     let nextR = m.round / 2;
     if (nextR < 1) return;
 
-    // Refresh matches from DB to find the latest available slot
-    const snap = await rtdb.ref('matches').once('value');
-    const allMatches = snap.val() || {};
-    
-    const nextMatchKey = Object.keys(allMatches).find(key => 
-        allMatches[key].round === nextR && !allMatches[key].p2 && allMatches[key].status === 'open'
-    );
+    // Check for an existing match in the next round waiting for an opponent
+    const nextMatch = matches.find(x => x.round === nextR && !x.p2 && x.status === 'open');
 
-    if (nextMatchKey) {
-        await rtdb.ref('matches/' + nextMatchKey).update({ p2: winner });
+    if (nextMatch) {
+        rtdb.ref('matches/' + nextMatch.id).update({ p2: winner });
     } else {
-        await rtdb.ref('matches').push({
+        rtdb.ref('matches').push({
             round: nextR, p1: winner, p2: null,
-            status: 'open', winner: null, score1: null, score2: null
+            status: 'open', winner: null, score1: 0, score2: 0
         });
     }
 }
@@ -259,19 +223,20 @@ function renderBracket() {
         const h3 = div.querySelector('h3');
         div.innerHTML = ''; if(h3) div.appendChild(h3);
         
-        matches.filter(m => m.round == parseInt(r)).forEach(m => {
+        matches.filter(m => m.round == r).forEach(m => {
             const card = document.createElement('div');
             card.className = `match-card ${m.status}`;
             
+            // Allow click only if user is part of the match
             const isMine = currentPlayer && (m.p1.id === currentPlayer.id || m.p2?.id === currentPlayer.id);
             if(isMine && m.status !== 'verified') card.onclick = () => openScoreModal(m.id);
 
             card.innerHTML = `
                 <div class="match-player ${m.winner?.id === m.p1.id ? 'winner' : ''}">
-                    <span>${m.p1.name}</span> <b>${m.score1 !== null ? m.score1 : '-'}</b>
+                    <span>${m.p1.name}</span> <b>${m.score1 ?? '-'}</b>
                 </div>
                 <div class="match-player ${m.winner?.id === m.p2?.id ? 'winner' : ''}">
-                    <span>${m.p2?.name || '...'}</span> <b>${m.score2 !== null ? m.score2 : '-'}</b>
+                    <span>${m.p2?.name || '...'}</span> <b>${m.score2 ?? '-'}</b>
                 </div>
             `;
             div.appendChild(card);
@@ -288,45 +253,28 @@ function renderPlayerList() {
     if(count) count.innerText = players.length;
 }
 
-// --- 8. RESET DATA ---
-window.resetData = async () => {
-    if (confirm("🚨 WARNING: This will delete the tournament and ALL players. Proceed?")) {
-        try {
-            // 1. Wipe the Firebase Realtime Database
-            await rtdb.ref('/').remove();
-
-            // 2. Clear the browser's memory (the "Remember Me" part)
-            sessionStorage.clear();
-            localStorage.clear();
-
-            alert("System Wiped! Returning to registration...");
-
-            // 3. Force the page to reload from scratch
-            window.location.href = window.location.origin + window.location.pathname;
-
-        } catch (error) {
-            console.error("Reset failed:", error);
-            alert("Error: Make sure your Firebase Rules allow deletion (set .write to true).");
-        }
-    }
-};
-
-rtdb.ref('settings/tournament').on('value', (snapshot) => {
-    const data = snapshot.val();
-    if (data && data.started) {
-        document.getElementById('registrationSection').style.display = 'none';
-        document.getElementById('bracketSection').style.display = 'block';
-    } else {
-        // If tournament hasn't started (or was reset), show registration!
-        document.getElementById('registrationSection').style.display = 'block';
-        document.getElementById('bracketSection').style.display = 'none';
-    }
-});
-
+// --- 8. GLOBAL ACTIONS ---
 window.closeModal = () => {
     document.getElementById('overlay').style.display = 'none';
     document.getElementById('scoreModal').style.display = 'none';
     currentMatchId = null;
 };
 
+window.resetData = async () => {
+    if(confirm("🚨 THIS WILL DELETE ALL DATA. ARE YOU SURE?")) {
+        try {
+            // Delete everything from Database
+            await rtdb.ref('/').remove();
+            // Clear local session
+            sessionStorage.clear();
+            localStorage.clear();
+            alert("Database wiped. Refreshing...");
+            location.reload();
+        } catch (e) {
+            alert("Error: Check your Firebase Rules (Must be set to true)!");
+        }
+    }
+};
+
+// Start the app
 init();
