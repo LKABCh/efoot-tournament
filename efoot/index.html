@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EFOOTBALL 2026</title>
+<script src="/__/firebase/9.x.x/firebase-app-compat.js"></script>
+
+<script src="/__/firebase/9.x.x/firebase-database-compat.js"></script>
+<script src="/__/firebase/9.x.x/firebase-storage-compat.js"></script>
+    <link rel="stylesheet" href="style.css">
+
+<script src="script.js"></script>
+</head>
+<body>
+    <nav>
+        <div class="logo">🏆 eFOOTBALL 2026</div>
+        <div id="userBadge" style="font-size: 0.8rem; color: #fbff00;"></div>
+        <div class="nav-controls">
+            <button id="adminStartBtn" onclick="startTournament()">START CUP</button>
+            <button class="btn-danger" onclick="resetData()">RESET</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section id="registrationSection">
+            <div class="hero">
+                <h1>ROAD TO GLORY</h1>
+                <p>Register your club. One player reports, the other confirms.</p>
+            </div>
+            
+            <div class="main-content">
+                <div class="card">
+                    <h2>👤 PLAYER ENTRY</h2>
+                    <form id="regForm">
+                        <div class="input-group">
+                            <label>USERNAME</label>
+                            <input type="text" id="username" placeholder="Ex: ProGamer_99" required>
+                        </div>
+                        <div class="input-group">
+                            <label>SELECT TEAM</label>
+                            <select id="teamSelect" required>
+                                <option value="">-- Select Team --</option>
+                                <option value="Real Madrid">Real Madrid</option>
+                                <option value="Man City">Man City</option>
+                                <option value="Bayern">Bayern</option>
+                                <option value="PSG">PSG</option>
+                                <option value="Barcelona">Barcelona</option>
+                                <option value="Liverpool">Liverpool</option>
+                                <option value="Arsenal">Arsenal</option>
+                                <option value="Inter">Inter</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn-register">JOIN TOURNAMENT</button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h3>REGISTERED (<span id="playerCount">0</span>)</h3>
+                    <ul id="playerList"></ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="bracketSection" style="display:none;">
+            <div class="hero"><h1>TOURNAMENT BRACKET</h1></div>
+            <div class="bracket-container">
+                <div class="round" id="round-16"><h3>ROUND OF 16</h3></div>
+                <div class="round" id="round-8"><h3>QUARTER FINAL</h3></div>
+                <div class="round" id="round-4"><h3>SEMI FINAL</h3></div>
+                <div class="round" id="round-2"><h3>FINAL</h3></div>
+                <div class="round" id="round-1"><h3>CHAMPION</h3></div>
+            </div>
+        </section>
+    </div>
+
+    <div class="overlay" id="overlay" onclick="closeModal()"></div>
+    <div class="modal" id="scoreModal">
+        <h2 id="modalMatchTitle">MATCH RESULT</h2>
+        
+        <div id="uploadSection">
+            <div class="score-inputs">
+                <input type="number" id="score1" placeholder="0">
+                <span class="vs-text">VS</span>
+                <input type="number" id="score2" placeholder="0">
+            </div>
+            <div class="input-group">
+                <label>Proof (Score)</label>
+                <input type="file" id="matchPhoto" accept="image/*">
+            </div>
+            <button class="btn-success" onclick="submitInitialScore()" style="width:100%">SUBMIT SCORE</button>
+        </div>
+
+        <div id="verifySection" style="display:none;">
+            <p style="text-align:center; color:#fbff00; margin-bottom:10px;">REPORTED SCORE:</p>
+            <h1 id="reportedScoreDisplay" style="text-align:center; font-size:2rem; margin-bottom:15px;">0 - 0</h1>
+            
+            <p style="text-align:center; font-size:0.8rem; color:#aaa;">PROOF:</p>
+            <img id="uploadedPhoto" style="width:100%; border-radius:10px; margin-bottom:15px; border:1px solid #333;">
+            
+            <div id="verifyButtons" style="display:flex; gap:10px;">
+                <button id="btnConfirm" class="btn-success" onclick="confirmScore(true)" style="flex:1">CONFIRM</button>
+                <button id="btnDispute" class="btn-danger" onclick="confirmScore(false)" style="flex:1">DISPUTE</button>
+            </div>
+            <p id="waitMessage" style="display:none; text-align:center; color:orange;">Waiting for opponent to verify...</p>
+        </div>
+
+        <button class="btn-cancel" onclick="closeModal()">CLOSE</button>
+    </div>
+
+    <script src="/__/firebase/init.js?useEmulator=true"></script>
+</body>
+</html>
