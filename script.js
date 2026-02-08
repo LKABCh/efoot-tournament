@@ -22,33 +22,35 @@ let currentMatchId = null;
 
 // --- 3. CORE INITIALIZATION ---
 function init() {
-    console.log("⚽ eFootball Tournament System Active");
+    console.log("⚽ eFootball Tournament: Admin & Instant Mode Active");
 
     if (currentPlayer) {
         const badge = document.getElementById('userBadge');
         if(badge) badge.innerText = `Connected: ${currentPlayer.name}`;
     }
 
+    // Sync Players
     rtdb.ref('players').on('value', (snapshot) => {
         const data = snapshot.val() || {};
         players = Object.keys(data).map(key => data[key]).sort((a, b) => a.id - b.id);
-        
         renderPlayerList();
         updateTeamDropdown(); 
         
+        // Show Admin Start Button only to the first player
         const adminBtn = document.getElementById('adminStartBtn');
         if (currentPlayer && players.length > 0 && currentPlayer.id === players[0].id) {
             if(adminBtn) adminBtn.style.display = 'inline-block';
         }
     });
 
+    // Sync Matches
     rtdb.ref('matches').on('value', (snapshot) => {
         const data = snapshot.val() || {};
         matches = Object.keys(data).map(key => ({ id: key, ...data[key] }));
         renderBracket();
-        if(currentMatchId) updateModalStatus(currentMatchId);
     });
 
+    // Check Tournament Status
     rtdb.ref('settings/tournament').on('value', (snapshot) => {
         const data = snapshot.val();
         if (data && data.started) {
@@ -58,16 +60,14 @@ function init() {
     });
 }
 
-// --- 4. REGISTRATION & TEAM LOCKING ---
+// --- 4. REGISTRATION ---
 document.getElementById('regForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('username').value.trim();
     const team = document.getElementById('teamSelect').value;
     
-    if(!name || !team) return alert("Fill in your name and pick a team!");
-
-    const isTaken = players.some(p => p.team === team);
-    if (isTaken) return alert("❌ This team was just taken! Choose another.");
+    if(!name || !team) return alert("Fill in name and pick a team!");
+    if (players.some(p => p.team === team)) return alert("❌ Team already taken!");
 
     const id = Date.now().toString();
     const newUser = { id, name, team };
@@ -78,26 +78,20 @@ document.getElementById('regForm').addEventListener('submit', async (e) => {
 });
 
 function updateTeamDropdown() {
-    const takenTeams = players.map(p => p.team);
     const select = document.getElementById('teamSelect');
     if(!select) return;
-
+    const takenTeams = players.map(p => p.team);
     Array.from(select.options).forEach(opt => {
-        if (opt.value === "") return;
-        if (takenTeams.includes(opt.value)) {
+        if (opt.value !== "" && takenTeams.includes(opt.value)) {
             opt.disabled = true;
-            opt.text = `${opt.value} (ALREADY TAKEN)`;
-        } else {
-            opt.disabled = false;
-            opt.text = opt.value;
+            opt.text = `${opt.value} (TAKEN)`;
         }
     });
 }
 
 // --- 5. TOURNAMENT CONTROL ---
 window.startTournament = async () => {
-    if (players.length < 2) return alert("Need at least 2 players to start!");
-
+    if (players.length < 2) return alert("Need at least 2 players!");
     let shuffled = [...players].sort(() => 0.5 - Math.random());
     let updates = {};
 
@@ -114,111 +108,85 @@ window.startTournament = async () => {
             winner: (p2.id === 'bye' ? p1 : null)
         };
     }
-    
     updates['/settings/tournament'] = { started: true };
     await rtdb.ref().update(updates);
 };
 
-// --- 6. SCORE REPORTING & REAL-TIME VERIFICATION ---
+// --- 6. MODAL & SCORE HANDLING ---
 window.openScoreModal = (id) => {
     currentMatchId = id;
-    updateModalStatus(id);
+    const m = matches.find(x => x.id === id);
+    const isAdmin = currentPlayer && players.length > 0 && currentPlayer.id === players[0].id;
+    
     document.getElementById('overlay').style.display = 'block';
     document.getElementById('scoreModal').style.display = 'block';
+
+    // Show Admin Panel if Admin, else show normal Upload Panel
+    const adminPanel = document.getElementById('adminPanel');
+    const uploadSection = document.getElementById('uploadSection');
+
+    if (isAdmin) {
+        adminPanel.style.display = 'block';
+        document.getElementById('adminScore1').value = m.score1 || 0;
+        document.getElementById('adminScore2').value = m.score2 || 0;
+        const preview = document.getElementById('adminPhotoPreview');
+        if (m.photoUrl) { preview.src = m.photoUrl; preview.style.display = 'block'; }
+        else { preview.style.display = 'none'; }
+    } else {
+        adminPanel.style.display = 'none';
+    }
+
+    // Players only see upload if match is open and they are playing
+    const isMine = currentPlayer && (m.p1.id === currentPlayer.id || (m.p2 && m.p2.id === currentPlayer.id));
+    if (isMine && m.status === 'open') {
+        uploadSection.style.display = 'block';
+    } else {
+        uploadSection.style.display = 'none';
+    }
 };
 
-function updateModalStatus(id) {
-    const m = matches.find(x => x.id === id);
-    if(!m) return;
-
-    const upSec = document.getElementById('uploadSection');
-    const verSec = document.getElementById('verifySection');
-    const btnBox = document.getElementById('verifyButtons');
-    const waitMsg = document.getElementById('waitMessage');
-    const disputeMsg = document.getElementById('disputeError'); // Ensure this ID exists in your HTML
-
-    // RESET VIEW
-    upSec.style.display = 'none';
-    verSec.style.display = 'none';
-    if(disputeMsg) disputeMsg.style.display = 'none';
-
-    if (m.status === 'waiting_verification') {
-        verSec.style.display = 'block';
-        document.getElementById('reportedScoreDisplay').innerText = `${m.score1} - ${m.score2}`;
-        document.getElementById('uploadedPhoto').src = m.photoUrl;
-
-        if (currentPlayer.id === m.reportedBy) {
-            btnBox.style.display = 'none';
-            waitMsg.style.display = 'block';
-        } else {
-            btnBox.style.display = 'flex';
-            waitMsg.style.display = 'none';
-        }
-    } else if (m.status === 'disputed') {
-        if (currentPlayer.id === m.reportedBy) {
-            // Reporter sees the error and must re-upload
-            upSec.style.display = 'block';
-            if(disputeMsg) {
-                disputeMsg.style.display = 'block';
-                disputeMsg.innerText = "❌ Opponent disputed your score. Please enter the CORRECT score and re-upload proof.";
-            }
-        } else {
-            // Opponent just waits for the fix
-            verSec.style.display = 'block';
-            if(waitMsg) {
-                waitMsg.style.display = 'block';
-                waitMsg.innerText = "Waiting for opponent to correct the score...";
-            }
-            btnBox.style.display = 'none';
-        }
-    } else {
-        // Status is 'open'
-        upSec.style.display = 'block';
-    }
-}
-
-window.submitInitialScore = async () => {
-    const s1 = document.getElementById('score1').value;
-    const s2 = document.getElementById('score2').value;
+window.submitScore = async () => {
+    const s1 = parseInt(document.getElementById('score1').value);
+    const s2 = parseInt(document.getElementById('score2').value);
     const file = document.getElementById('matchPhoto').files[0];
     
-    if(!file || s1 === "" || s2 === "") return alert("Please enter the score and upload a screenshot proof.");
+    if(!file || isNaN(s1) || isNaN(s2)) return alert("Enter scores and upload proof!");
 
     const ref = storage.ref().child(`proofs/${currentMatchId}`);
     await ref.put(file);
     const url = await ref.getDownloadURL();
 
+    const match = matches.find(m => m.id === currentMatchId);
+    const winner = (s1 > s2) ? match.p1 : match.p2;
+
     await rtdb.ref('matches/' + currentMatchId).update({
-        score1: parseInt(s1), 
-        score2: parseInt(s2),
-        photoUrl: url, 
-        status: 'waiting_verification', 
-        reportedBy: currentPlayer.id
+        score1: s1, score2: s2, photoUrl: url, 
+        status: 'verified', winner: winner
     });
+
+    promoteWinner(match, winner);
+    closeModal();
 };
 
-window.confirmScore = async (ok) => {
-    if(!ok) {
-        // DISPUTE LOGIC
-        await rtdb.ref('matches/' + currentMatchId).update({ status: 'disputed' });
-        alert("Score disputed! The opponent has been notified to correct it.");
-        return;
-    }
-
-    // CONFIRM LOGIC
-    const m = matches.find(x => x.id === currentMatchId);
-    const winner = (m.score1 > m.score2) ? m.p1 : m.p2;
-
-    await rtdb.ref('matches/' + currentMatchId).update({ status: 'verified', winner });
+window.adminForceUpdate = async () => {
+    const s1 = parseInt(document.getElementById('adminScore1').value);
+    const s2 = parseInt(document.getElementById('adminScore2').value);
     
-    promoteWinner(m, winner);
+    const match = matches.find(m => m.id === currentMatchId);
+    const winner = (s1 > s2) ? match.p1 : match.p2;
+
+    await rtdb.ref('matches/' + currentMatchId).update({
+        score1: s1, score2: s2, status: 'verified', winner: winner
+    });
+
+    promoteWinner(match, winner);
     closeModal();
+    alert("Admin: Match updated.");
 };
 
 function promoteWinner(m, winner) {
     let nextR = m.round / 2;
     if (nextR < 1) return;
-
     const nextMatch = matches.find(x => x.round === nextR && !x.p2 && x.status === 'open');
 
     if (nextMatch) {
@@ -236,22 +204,25 @@ function renderBracket() {
     ['16', '8', '4', '2', '1'].forEach(r => {
         const div = document.getElementById(`round-${r}`);
         if(!div) return;
-        const h3 = div.querySelector('h3');
-        div.innerHTML = ''; if(h3) div.appendChild(h3);
+        div.innerHTML = `<h3>Round ${r}</h3>`;
         
         matches.filter(m => m.round == r).forEach(m => {
             const card = document.createElement('div');
             card.className = `match-card ${m.status}`;
             
-            const isMine = currentPlayer && (m.p1.id === currentPlayer.id || m.p2?.id === currentPlayer.id);
-            if(isMine && m.status !== 'verified') card.onclick = () => openScoreModal(m.id);
+            const isAdmin = currentPlayer && players.length > 0 && currentPlayer.id === players[0].id;
+            const isMine = currentPlayer && (m.p1.id === currentPlayer.id || (m.p2 && m.p2.id === currentPlayer.id));
+
+            if (isAdmin || (isMine && m.status === 'open')) {
+                card.onclick = () => openScoreModal(m.id);
+            }
 
             card.innerHTML = `
                 <div class="match-player ${m.winner?.id === m.p1.id ? 'winner' : ''}">
-                    <span>${m.p1.name}</span> <b>${m.score1 ?? '-'}</b>
+                    <span>${m.p1.name}</span> <b>${m.score1}</b>
                 </div>
                 <div class="match-player ${m.winner?.id === m.p2?.id ? 'winner' : ''}">
-                    <span>${m.p2?.name || '...'}</span> <b>${m.score2 ?? '-'}</b>
+                    <span>${m.p2?.name || '...'}</span> <b>${m.score2}</b>
                 </div>
             `;
             div.appendChild(card);
@@ -261,31 +232,19 @@ function renderBracket() {
 
 function renderPlayerList() {
     const list = document.getElementById('playerList');
-    if(list) {
-        list.innerHTML = players.map(p => `<li>${p.name} <span style="color:var(--primary)">(${p.team})</span></li>`).join('');
-    }
-    const count = document.getElementById('playerCount');
-    if(count) count.innerText = players.length;
+    if(list) list.innerHTML = players.map(p => `<li>${p.name} (${p.team})</li>`).join('');
 }
 
-// --- 8. GLOBAL ACTIONS ---
 window.closeModal = () => {
     document.getElementById('overlay').style.display = 'none';
     document.getElementById('scoreModal').style.display = 'none';
-    currentMatchId = null;
 };
 
 window.resetData = async () => {
-    if(confirm("🚨 THIS WILL DELETE ALL DATA. ARE YOU SURE?")) {
-        try {
-            await rtdb.ref('/').remove();
-            sessionStorage.clear();
-            localStorage.clear();
-            alert("Database wiped. Refreshing...");
-            location.reload();
-        } catch (e) {
-            alert("Error: Check your Firebase Rules!");
-        }
+    if(confirm("🚨 DELETE ALL DATA?")) {
+        await rtdb.ref('/').remove();
+        sessionStorage.clear();
+        location.reload();
     }
 };
 
