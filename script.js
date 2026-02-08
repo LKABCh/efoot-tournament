@@ -1,251 +1,124 @@
-// --- 1. FIREBASE CONFIGURATION ---
-const firebaseConfig = {
-    apiKey: "AIzaSyBF8i7TVx8_lU6zYTl5b7nHDrZ-wJ0-kqk",
-    authDomain: "efoot-tournament.firebaseapp.com",
-    databaseURL: "https://efoot-tournament-default-rtdb.europe-west1.firebasedatabase.app",
-    projectId: "efoot-tournament",
-    storageBucket: "efoot-tournament.firebasestorage.app",
-    messagingSenderId: "319953733524",
-    appId: "1:319953733524:web:a2d666679e0d7d27713181"
-};
-
-// Initialize Firebase
-if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-const rtdb = firebase.database();
-const storage = firebase.storage();
-
-// --- 2. GLOBAL STATE ---
-let players = [];
-let matches = [];
-let currentPlayer = JSON.parse(sessionStorage.getItem('ef_user')) || null;
-let currentMatchId = null;
-
-// --- 3. CORE INITIALIZATION ---
-function init() {
-    console.log("⚽ eFootball Tournament: Admin & Instant Mode Active");
-
-    if (currentPlayer) {
-        const badge = document.getElementById('userBadge');
-        if(badge) badge.innerText = `Connected: ${currentPlayer.name}`;
-    }
-
-    // Sync Players
-    rtdb.ref('players').on('value', (snapshot) => {
-        const data = snapshot.val() || {};
-        players = Object.keys(data).map(key => data[key]).sort((a, b) => a.id - b.id);
-        renderPlayerList();
-        updateTeamDropdown(); 
-        
-        // Show Admin Start Button only to the first player
-        const adminBtn = document.getElementById('adminStartBtn');
-        if (currentPlayer && players.length > 0 && currentPlayer.id === players[0].id) {
-            if(adminBtn) adminBtn.style.display = 'inline-block';
-        }
-    });
-
-    // Sync Matches
-    rtdb.ref('matches').on('value', (snapshot) => {
-        const data = snapshot.val() || {};
-        matches = Object.keys(data).map(key => ({ id: key, ...data[key] }));
-        renderBracket();
-    });
-
-    // Check Tournament Status
-    rtdb.ref('settings/tournament').on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (data && data.started) {
-            document.getElementById('registrationSection').style.display = 'none';
-            document.getElementById('bracketSection').style.display = 'block';
-        }
-    });
+/* --- CYBER-SPORT THEME --- */
+:root {
+    --primary: #fbff00;    /* Electric Yellow */
+    --secondary: #6e00ff;  /* Neon Purple */
+    --accent: #ff0055;     /* Cyber Pink */
+    --bg-dark: #05050b;    
+    --card-bg: #11111d;
+    --text-light: #ffffff;
+    --text-dim: #a0a0b5;
 }
 
-// --- 4. REGISTRATION ---
-document.getElementById('regForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('username').value.trim();
-    const team = document.getElementById('teamSelect').value;
-    
-    if(!name || !team) return alert("Fill in name and pick a team!");
-    if (players.some(p => p.team === team)) return alert("❌ Team already taken!");
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
 
-    const id = Date.now().toString();
-    const newUser = { id, name, team };
-    
-    await rtdb.ref('players/' + id).set(newUser);
-    sessionStorage.setItem('ef_user', JSON.stringify(newUser));
-    location.reload(); 
-});
-
-function updateTeamDropdown() {
-    const select = document.getElementById('teamSelect');
-    if(!select) return;
-    const takenTeams = players.map(p => p.team);
-    Array.from(select.options).forEach(opt => {
-        if (opt.value !== "" && takenTeams.includes(opt.value)) {
-            opt.disabled = true;
-            opt.text = `${opt.value} (TAKEN)`;
-        }
-    });
+body {
+    background-color: var(--bg-dark);
+    color: var(--text-light);
+    overflow-x: hidden;
+    background-image: radial-gradient(circle at 50% 0%, #1a1a3a 0%, #05050b 70%);
 }
 
-// --- 5. TOURNAMENT CONTROL ---
-window.startTournament = async () => {
-    if (players.length < 2) return alert("Need at least 2 players!");
-    let shuffled = [...players].sort(() => 0.5 - Math.random());
-    let updates = {};
-
-    for(let i = 0; i < shuffled.length; i += 2) {
-        let p1 = shuffled[i];
-        let p2 = shuffled[i+1] || { name: 'BYE', id: 'bye', team: '-' };
-        let mId = rtdb.ref().child('matches').push().key;
-        
-        updates['/matches/' + mId] = {
-            round: 16, p1, p2, 
-            status: (p2.id === 'bye' ? 'verified' : 'open'),
-            score1: (p2.id === 'bye' ? 3 : 0),
-            score2: 0,
-            winner: (p2.id === 'bye' ? p1 : null)
-        };
-    }
-    updates['/settings/tournament'] = { started: true };
-    await rtdb.ref().update(updates);
-};
-
-// --- 6. MODAL & SCORE HANDLING ---
-window.openScoreModal = (id) => {
-    currentMatchId = id;
-    const m = matches.find(x => x.id === id);
-    const isAdmin = currentPlayer && players.length > 0 && currentPlayer.id === players[0].id;
-    
-    document.getElementById('overlay').style.display = 'block';
-    document.getElementById('scoreModal').style.display = 'block';
-
-    // Show Admin Panel if Admin, else show normal Upload Panel
-    const adminPanel = document.getElementById('adminPanel');
-    const uploadSection = document.getElementById('uploadSection');
-
-    if (isAdmin) {
-        adminPanel.style.display = 'block';
-        document.getElementById('adminScore1').value = m.score1 || 0;
-        document.getElementById('adminScore2').value = m.score2 || 0;
-        const preview = document.getElementById('adminPhotoPreview');
-        if (m.photoUrl) { preview.src = m.photoUrl; preview.style.display = 'block'; }
-        else { preview.style.display = 'none'; }
-    } else {
-        adminPanel.style.display = 'none';
-    }
-
-    // Players only see upload if match is open and they are playing
-    const isMine = currentPlayer && (m.p1.id === currentPlayer.id || (m.p2 && m.p2.id === currentPlayer.id));
-    if (isMine && m.status === 'open') {
-        uploadSection.style.display = 'block';
-    } else {
-        uploadSection.style.display = 'none';
-    }
-};
-
-window.submitScore = async () => {
-    const s1 = parseInt(document.getElementById('score1').value);
-    const s2 = parseInt(document.getElementById('score2').value);
-    const file = document.getElementById('matchPhoto').files[0];
-    
-    if(!file || isNaN(s1) || isNaN(s2)) return alert("Enter scores and upload proof!");
-
-    const ref = storage.ref().child(`proofs/${currentMatchId}`);
-    await ref.put(file);
-    const url = await ref.getDownloadURL();
-
-    const match = matches.find(m => m.id === currentMatchId);
-    const winner = (s1 > s2) ? match.p1 : match.p2;
-
-    await rtdb.ref('matches/' + currentMatchId).update({
-        score1: s1, score2: s2, photoUrl: url, 
-        status: 'verified', winner: winner
-    });
-
-    promoteWinner(match, winner);
-    closeModal();
-};
-
-window.adminForceUpdate = async () => {
-    const s1 = parseInt(document.getElementById('adminScore1').value);
-    const s2 = parseInt(document.getElementById('adminScore2').value);
-    
-    const match = matches.find(m => m.id === currentMatchId);
-    const winner = (s1 > s2) ? match.p1 : match.p2;
-
-    await rtdb.ref('matches/' + currentMatchId).update({
-        score1: s1, score2: s2, status: 'verified', winner: winner
-    });
-
-    promoteWinner(match, winner);
-    closeModal();
-    alert("Admin: Match updated.");
-};
-
-function promoteWinner(m, winner) {
-    let nextR = m.round / 2;
-    if (nextR < 1) return;
-    const nextMatch = matches.find(x => x.round === nextR && !x.p2 && x.status === 'open');
-
-    if (nextMatch) {
-        rtdb.ref('matches/' + nextMatch.id).update({ p2: winner });
-    } else {
-        rtdb.ref('matches').push({
-            round: nextR, p1: winner, p2: null,
-            status: 'open', winner: null, score1: 0, score2: 0
-        });
-    }
+nav {
+    background: rgba(5, 5, 11, 0.9);
+    backdrop-filter: blur(10px);
+    padding: 15px 5%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    position: sticky; top: 0; z-index: 1000;
 }
 
-// --- 7. UI RENDERING ---
-function renderBracket() {
-    ['16', '8', '4', '2', '1'].forEach(r => {
-        const div = document.getElementById(`round-${r}`);
-        if(!div) return;
-        div.innerHTML = `<h3>Round ${r}</h3>`;
-        
-        matches.filter(m => m.round == r).forEach(m => {
-            const card = document.createElement('div');
-            card.className = `match-card ${m.status}`;
-            
-            const isAdmin = currentPlayer && players.length > 0 && currentPlayer.id === players[0].id;
-            const isMine = currentPlayer && (m.p1.id === currentPlayer.id || (m.p2 && m.p2.id === currentPlayer.id));
-
-            if (isAdmin || (isMine && m.status === 'open')) {
-                card.onclick = () => openScoreModal(m.id);
-            }
-
-            card.innerHTML = `
-                <div class="match-player ${m.winner?.id === m.p1.id ? 'winner' : ''}">
-                    <span>${m.p1.name}</span> <b>${m.score1}</b>
-                </div>
-                <div class="match-player ${m.winner?.id === m.p2?.id ? 'winner' : ''}">
-                    <span>${m.p2?.name || '...'}</span> <b>${m.score2}</b>
-                </div>
-            `;
-            div.appendChild(card);
-        });
-    });
+.logo {
+    font-size: 1.2rem; font-weight: 900;
+    background: linear-gradient(90deg, var(--primary), #fff);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
 
-function renderPlayerList() {
-    const list = document.getElementById('playerList');
-    if(list) list.innerHTML = players.map(p => `<li>${p.name} (${p.team})</li>`).join('');
+.nav-controls { display: flex; gap: 10px; }
+
+button {
+    padding: 10px 15px; border: none; border-radius: 6px;
+    font-weight: bold; cursor: pointer; text-transform: uppercase;
+    font-size: 0.8rem; transition: 0.3s;
 }
 
-window.closeModal = () => {
-    document.getElementById('overlay').style.display = 'none';
-    document.getElementById('scoreModal').style.display = 'none';
-};
+#adminStartBtn { background: var(--primary); color: #000; display: none; }
+.btn-danger { background: rgba(255,0,85,0.2); color: var(--accent); border: 1px solid var(--accent); }
+.btn-success { background: linear-gradient(90deg, #00f2fe, #4facfe); color: white; }
+.btn-register { background: var(--secondary); color: white; width: 100%; padding: 15px; margin-top: 15px; }
+.btn-cancel { background: transparent; color: #666; width: 100%; margin-top: 10px; }
 
-window.resetData = async () => {
-    if(confirm("🚨 DELETE ALL DATA?")) {
-        await rtdb.ref('/').remove();
-        sessionStorage.clear();
-        location.reload();
-    }
-};
+/* CENTERED HERO */
+.hero {
+    display: flex; flex-direction: column; align-items: center; 
+    text-align: center; margin: 30px 0;
+}
+.hero h1 { font-size: clamp(2rem, 8vw, 3.5rem); color: var(--text-light); margin-bottom: 10px; }
+.hero p { color: var(--text-dim); max-width: 600px; padding: 0 20px; }
 
-init();
+.container { max-width: 1200px; margin: 0 auto; padding: 0 15px; }
+.main-content { display: flex; flex-direction: column; align-items: center; gap: 30px; }
+
+.card {
+    background: var(--card-bg); padding: 30px; border-radius: 15px;
+    width: 100%; max-width: 500px; border: 1px solid rgba(255,255,255,0.05);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+}
+
+input, select {
+    width: 100%; padding: 12px; margin-top: 5px;
+    background: #000; border: 1px solid #333; color: white; border-radius: 5px;
+}
+
+/* BRACKET */
+.bracket-container { display: flex; gap: 40px; overflow-x: auto; padding: 20px 0; }
+.round { min-width: 280px; display: flex; flex-direction: column; gap: 20px; }
+.round h3 { color: var(--primary); font-size: 0.9rem; letter-spacing: 2px; border-left: 3px solid var(--secondary); padding-left: 10px; }
+
+.match-card {
+    background: var(--card-bg); border: 1px solid rgba(255,255,255,0.05);
+    padding: 15px; border-radius: 10px; cursor: pointer; position: relative;
+}
+
+/* STATUS STYLES */
+.match-card.waiting_verification {
+    border: 1px solid var(--primary);
+    box-shadow: 0 0 15px rgba(251, 255, 0, 0.2);
+    animation: pulse 2s infinite;
+}
+@keyframes pulse { 0% {opacity:1;} 50% {opacity:0.7;} 100% {opacity:1;} }
+
+.match-player { display: flex; justify-content: space-between; padding: 8px 0; font-size: 0.9rem; }
+.winner { color: var(--primary); font-weight: bold; }
+
+/* MODAL */
+.overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1001; display:none; }
+.modal {
+    position: fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    background: var(--card-bg); padding: 30px; width: 90%; max-width: 450px;
+    border-radius: 20px; border: 1px solid var(--primary); z-index: 1002; display:none;
+}
+.score-inputs { display: flex; justify-content: center; align-items: center; gap: 15px; margin: 20px 0; }
+.score-inputs input { font-size: 2rem; text-align: center; width: 80px; border: 1px solid var(--secondary); }
+.vs-text { font-weight: 900; font-style: italic; color: #444; }
+
+ul#playerList { list-style: none; }
+ul#playerList li {
+    background: rgba(255,255,255,0.05);
+    padding: 12px 15px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-left: 3px solid var(--secondary);
+}
+
+#playerCount { color: var(--primary); font-weight: bold; }
+
+
+@media (max-width: 600px) {
+    nav { flex-direction: column; gap: 10px; }
+    .nav-controls { width: 100%; justify-content: center; }
+}
