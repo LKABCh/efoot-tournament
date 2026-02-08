@@ -1,5 +1,5 @@
 const firebaseConfig = {
-  apiKey: import.meta.env?.VITE_FIREBASE_API_KEY || "AIzaSyBF8i7TVx8_lU6zYTl5b7nHDrZ-wJ0-kqk",
+  apiKey: "AIzaSyBF8i7TVx8_lU6zYTl5b7nHDrZ-wJ0-kqk",
   authDomain: "efoot-tournament.firebaseapp.com",
   projectId: "efoot-tournament",
   storageBucket: "efoot-tournament.firebasestorage.app",
@@ -22,7 +22,8 @@ let currentMatchId = null;
 // --- 3. THE "WATCHER" ---
 function init() {
     if (currentPlayer) {
-        document.getElementById('currentUserDisplay').innerText = `User: ${currentPlayer.name}`;
+        const badge = document.getElementById('userBadge');
+        if(badge) badge.innerText = `Logged in: ${currentPlayer.name} (${currentPlayer.team})`;
     }
 
     // Admin Check: Only the first registered player sees the Start Button
@@ -32,7 +33,6 @@ function init() {
             if (currentPlayer && currentPlayer.id === firstPlayer.id) {
                 const btn = document.getElementById('adminStartBtn');
                 if(btn) btn.style.display = 'block';
-                console.log("You are the Organizer!");
             }
         }
     });
@@ -41,7 +41,7 @@ function init() {
     db.collection("players").onSnapshot((snapshot) => {
         players = snapshot.docs.map(doc => doc.data());
         renderPlayerList();
-        updateDropdown();
+        updateDropdown(); // Disables taken clubs in HTML
     });
 
     // Sync Matches
@@ -67,7 +67,7 @@ document.getElementById('regForm').addEventListener('submit', async function(e) 
     const name = document.getElementById('username').value.trim();
     const team = document.getElementById('teamSelect').value;
 
-    if (players.some(p => p.team === team)) return alert("Team already taken!");
+    if (players.some(p => p.team === team)) return alert("This team is already taken!");
 
     const newPlayer = { id: Date.now().toString(), name, team };
     
@@ -80,7 +80,7 @@ document.getElementById('regForm').addEventListener('submit', async function(e) 
 
 // --- 5. ADMIN START ---
 window.startTournament = async function() {
-    if (players.length < 2) return alert("Need 2+ players!");
+    if (players.length < 2) return alert("Need at least 2 players!");
     
     let shuffled = [...players].sort(() => 0.5 - Math.random());
     const batch = db.batch();
@@ -112,16 +112,25 @@ window.startTournament = async function() {
 window.openScoreModal = function(id) {
     currentMatchId = id;
     const match = matches.find(m => m.id === id);
-    if(match.status === 'verified') return;
+    if(!match || match.status === 'verified') return;
 
     const upSec = document.getElementById('uploadSection');
     const verSec = document.getElementById('verifySection');
+    const displayScore = document.getElementById('reportedScoreDisplay');
+    const displayPhoto = document.getElementById('uploadedPhoto');
 
     if (match.status === 'waiting_verification') {
         upSec.style.display = 'none';
         verSec.style.display = 'block';
-        document.getElementById('reportedScore').innerText = `${match.score1} - ${match.score2}`;
-        document.getElementById('uploadedPhoto').src = match.photoUrl;
+        
+        // Correctly link the display elements to match data
+        if(displayScore) displayScore.innerText = `${match.score1} - ${match.score2}`;
+        if(displayPhoto) displayPhoto.src = match.photoUrl;
+
+        // Hide verify buttons if YOU are the one who reported it
+        const isReporter = match.reportedBy === currentPlayer.id;
+        document.getElementById('verifyButtons').style.display = isReporter ? 'none' : 'flex';
+        document.getElementById('waitMessage').style.display = isReporter ? 'block' : 'none';
     } else {
         upSec.style.display = 'block';
         verSec.style.display = 'none';
@@ -136,12 +145,14 @@ window.submitInitialScore = async function() {
     const s2 = document.getElementById('score2').value;
     const file = document.getElementById('matchPhoto').files[0];
 
-    if(!file || s1 === "" || s2 === "") return alert("Upload screenshot and enter score!");
+    if(!file || s1 === "" || s2 === "") return alert("Please enter score and upload screenshot!");
 
+    // Upload photo to storage
     const storageRef = storage.ref(`matches/${currentMatchId}`);
     await storageRef.put(file);
     const url = await storageRef.getDownloadURL();
 
+    // Update match status to waiting_verification
     await db.collection("matches").doc(currentMatchId).update({
         score1: parseInt(s1),
         score2: parseInt(s2),
@@ -166,7 +177,7 @@ window.confirmScore = async function(isCorrect) {
         promoteWinner(match, winner);
     } else {
         await db.collection("matches").doc(currentMatchId).update({status: 'disputed'});
-        alert("Dispute reported! Admin will check.");
+        alert("Match Disputed! An admin must resolve this.");
     }
     closeModal();
 };
@@ -175,10 +186,12 @@ async function promoteWinner(m, winner) {
     let nextRound = m.round / 2;
     if (nextRound < 1) return;
     
+    // Find if a match for the next round exists with an empty slot
     const nextMatch = matches.find(x => x.round === nextRound && x.p2 === null);
     if (nextMatch) {
         await db.collection("matches").doc(nextMatch.id).update({ p2: winner });
     } else {
+        // Create new match for next round
         await db.collection("matches").add({
             round: nextRound, p1: winner, p2: null,
             score1: null, score2: null, winner: null, status: 'open'
@@ -187,6 +200,21 @@ async function promoteWinner(m, winner) {
 }
 
 // --- 7. RENDERING HELPERS ---
+function updateDropdown() {
+    const select = document.getElementById('teamSelect');
+    if(!select) return;
+    
+    const takenTeams = players.map(p => p.team);
+    
+    // Loop through HTML options to disable taken ones
+    Array.from(select.options).forEach(opt => {
+        if (opt.value && takenTeams.includes(opt.value)) {
+            opt.disabled = true;
+            opt.textContent = opt.value + " (ALREADY TAKEN)";
+        }
+    });
+}
+
 function renderBracket() {
     ['16', '8', '4', '2', '1'].forEach(r => {
         const el = document.getElementById(`round-${r}`);
@@ -213,7 +241,7 @@ function renderBracket() {
             <div class="match-player ${m.winner?.id === m.p2?.id ? 'winner' : ''}">
                 <span>${m.p2?.name || 'WAITING...'}</span><span>${m.score2 ?? '-'}</span>
             </div>
-            <small>${m.status === 'waiting_verification' ? '⚠️ NEED VERIFY' : ''}</small>
+            <small>${m.status === 'waiting_verification' ? '⚠️ VERIFY NOW' : ''}</small>
         `;
         roundDiv.appendChild(div);
     });
@@ -227,22 +255,13 @@ function renderPlayerList() {
     }
 }
 
-function updateDropdown() {
-    const select = document.getElementById('teamSelect');
-    if(!select) return;
-    const taken = players.map(p => p.team);
-    Array.from(select.options).forEach(opt => {
-        if (opt.value && taken.includes(opt.value)) opt.disabled = true;
-    });
-}
-
 window.closeModal = () => {
     document.getElementById('overlay').style.display = 'none';
     document.getElementById('scoreModal').style.display = 'none';
 };
 
 window.resetData = async () => {
-    if(confirm("Wipe ALL cloud data?")) {
+    if(confirm("DANGER: This will delete ALL data (players and matches). Continue?")) {
         const mDocs = await db.collection("matches").get();
         const pDocs = await db.collection("players").get();
         mDocs.forEach(d => d.ref.delete());
