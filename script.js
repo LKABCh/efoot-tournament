@@ -144,4 +144,16 @@ function init() {
     });
 }
 
+window.resetData = async () => {
+    if(!confirm("DELETE ALL DATA?")) return;
+    const mDocs = await db.collection("matches").get();
+    const pDocs = await db.collection("players").get();
+    for (const doc of mDocs.docs) await doc.ref.delete();
+    for (const doc of pDocs.docs) await doc.ref.delete();
+    await db.collection("settings").doc("tournament").delete();
+    sessionStorage.clear();
+    location.reload();
+};
+
 init();
+
